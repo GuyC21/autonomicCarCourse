@@ -87,28 +87,34 @@ class LaneDetector:
 
     # ──────────────────────── Feature Extraction ───────────────────────────
     def _extract_lane_features(self, frame: np.ndarray) -> np.ndarray:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        blur = cv2.GaussianBlur(gray, (5, 5), 0)
-
-        # Sobel-X gradient
-        sx = cv2.Sobel(blur, cv2.CV_64F, 1, 0, ksize=3)
-        asx = np.abs(sx)
-        mx = np.max(asx)
-        scaled = np.uint8(255.0 * asx / mx) if mx > 0 else np.zeros_like(gray)
-        _, sobel_mask = cv2.threshold(scaled, 25, 255, cv2.THRESH_BINARY)
-
-        # White colour (HLS lightness)
+        # 1. HLS thresholds
         hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
-        l_ch = hls[:, :, 1]
+        l_channel = hls[:, :, 1]
+        s_channel = hls[:, :, 2]
+        
+        # L-channel with CLAHE (good for bright white lines)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        l_eq = clahe.apply(l_ch)
-        _, white_mask = cv2.threshold(l_eq, 200, 255, cv2.THRESH_BINARY)
+        l_clahe = clahe.apply(l_channel)
+        _, l_binary = cv2.threshold(l_clahe, 190, 255, cv2.THRESH_BINARY)
 
-        # Canny edges
-        canny = cv2.Canny(blur, 50, 150)
+        # S-channel (great for yellow lines)
+        _, s_binary = cv2.threshold(s_channel, 170, 255, cv2.THRESH_BINARY)
 
-        combined = cv2.bitwise_or(sobel_mask, white_mask)
-        combined = cv2.bitwise_or(combined, canny)
+        # 2. Sobel X on L-channel
+        sobelx = cv2.Sobel(l_clahe, cv2.CV_64F, 1, 0, ksize=3)
+        abs_sobelx = np.absolute(sobelx)
+        scaled_sobel = np.uint8(255 * abs_sobelx / np.max(abs_sobelx))
+        _, sobel_binary = cv2.threshold(scaled_sobel, 50, 255, cv2.THRESH_BINARY)
+
+        # 3. Canny edges
+        blurred = cv2.GaussianBlur(l_clahe, (5, 5), 0)
+        edges = cv2.Canny(blurred, 50, 150)
+
+        # Combine everything
+        combined = np.zeros_like(l_channel)
+        combined[(l_binary == 255) | (s_binary == 255) | (sobel_binary == 255) | (edges == 255)] = 255
+
+        # Apply ROI mask
         return cv2.bitwise_and(combined, self.roi_mask)
 
     # ──────────────────────── Sliding Window Search ────────────────────────
@@ -202,23 +208,35 @@ class LaneDetector:
     def _validate_and_smooth(self, left_fit: Optional[np.ndarray],
                              right_fit: Optional[np.ndarray]) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
 
-        # Strategy: the RIGHT white line is the only reliably detectable feature.
-        # The left (yellow) line is sun-bleached beyond detection.  We ALWAYS
-        # infer the left lane from the right lane using a fixed lane width.
-        # This avoids the sliding window locking onto the center dashes instead.
-
-        # Validate right lane
+        valid_l = False
         valid_r = False
+
+        if left_fit is not None:
+            lb = np.polyval(left_fit, self.height)
+            if self.width * 0.05 < lb < self.width * 0.50:
+                valid_l = True
+                
         if right_fit is not None:
             rb = np.polyval(right_fit, self.height)
-            if self.width * 0.45 < rb < self.width * 0.95:
+            if self.width * 0.50 < rb < self.width * 0.95:
                 valid_r = True
 
-        if valid_r:
+        if valid_l and valid_r:
+            w_bot = np.polyval(right_fit, self.height) - np.polyval(left_fit, self.height)
+            w_top = np.polyval(right_fit, 0) - np.polyval(left_fit, 0)
+            if not (200 < w_bot < 550 and 200 < w_top < 550):
+                valid_l = False  # Trust the right lane more since it's higher contrast white
+
+        if valid_r and not valid_l:
+            left_fit = self._infer_missing_lane(right_fit, is_right=True)
+            valid_l = True
+        elif valid_l and not valid_r:
+            right_fit = self._infer_missing_lane(left_fit, is_right=False)
+            valid_r = True
+
+        if valid_l and valid_r:
+            self.left_fit_hist.append(left_fit)
             self.right_fit_hist.append(right_fit)
-            # Always infer left from right
-            inferred_left = self._infer_missing_lane(right_fit, is_right=True)
-            self.left_fit_hist.append(inferred_left)
             self.missed = 0
         else:
             self.missed += 1
