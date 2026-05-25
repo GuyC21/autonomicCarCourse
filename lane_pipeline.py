@@ -103,7 +103,11 @@ class LaneDetector:
         # 2. Sobel X on L-channel
         sobelx = cv2.Sobel(l_clahe, cv2.CV_64F, 1, 0, ksize=3)
         abs_sobelx = np.absolute(sobelx)
-        scaled_sobel = np.uint8(255 * abs_sobelx / np.max(abs_sobelx))
+        max_sobel = np.max(abs_sobelx)
+        if max_sobel > 0:
+            scaled_sobel = np.uint8(255 * abs_sobelx / max_sobel)
+        else:
+            scaled_sobel = np.zeros_like(abs_sobelx, dtype=np.uint8)
         _, sobel_binary = cv2.threshold(scaled_sobel, 50, 255, cv2.THRESH_BINARY)
 
         # 3. Canny edges
@@ -147,6 +151,8 @@ class LaneDetector:
 
         l_cur, r_cur = l_base, r_base
         l_inds, r_inds = [], []
+        
+        l_drift, r_drift = 0, 0
 
         for i in range(self.n_windows):
             y_lo = h - (i + 1) * win_h
@@ -165,9 +171,18 @@ class LaneDetector:
             r_inds.append(good_r)
 
             if len(good_l) > self.min_pix_recenter:
-                l_cur = int(np.mean(nzx[good_l]))
+                new_l = int(np.mean(nzx[good_l]))
+                l_drift = new_l - l_cur
+                l_cur = new_l
+            else:
+                l_cur += l_drift
+
             if len(good_r) > self.min_pix_recenter:
-                r_cur = int(np.mean(nzx[good_r]))
+                new_r = int(np.mean(nzx[good_r]))
+                r_drift = new_r - r_cur
+                r_cur = new_r
+            else:
+                r_cur += r_drift
 
         l_inds = np.concatenate(l_inds) if l_inds else np.array([], dtype=int)
         r_inds = np.concatenate(r_inds) if r_inds else np.array([], dtype=int)
