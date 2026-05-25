@@ -4,6 +4,10 @@ debug_pipeline.py
 deep_debug.py
 calibrate.py
 __pycache__
+.uv-cache/
+.uv-python/
 project_video_output.mp4
+project_video_lane_output.mp4
 project_video.mp4
 stress_test.py
+lane_calib.npy

@@ -15,6 +15,9 @@ class TestLaneDetector(unittest.TestCase):
         cls.h, cls.w = 360, 640
         cls.det = LaneDetector((cls.h, cls.w))
 
+    def setUp(self):
+        self.det = LaneDetector((self.h, self.w))
+
     # ── Construction ──
     def test_init_resolution(self):
         self.assertEqual(self.det.height, 360)
@@ -86,6 +89,25 @@ class TestLaneDetector(unittest.TestCase):
         l_pts, r_pts = self.det._sliding_window_search(binary)
         self.assertGreater(l_pts.shape[0], 0)
 
+    # Hough Transform
+    def test_hough_segments_detect_vertical_lanes(self):
+        binary = np.zeros((self.h, self.w), dtype=np.uint8)
+        binary[:, 158:162] = 255
+        binary[:, 478:482] = 255
+        segments = self.det._hough_segments(binary)
+        self.assertGreater(segments.shape[0], 0)
+        self.assertEqual(segments.shape[1], 4)
+
+    def test_hough_lane_search_separates_lane_points(self):
+        binary = np.zeros((self.h, self.w), dtype=np.uint8)
+        binary[:, 158:162] = 255
+        binary[:, 478:482] = 255
+        l_pts, r_pts = self.det._hough_lane_search(binary)
+        self.assertGreater(l_pts.shape[0], 0)
+        self.assertGreater(r_pts.shape[0], 0)
+        self.assertAlmostEqual(np.mean(l_pts[:, 0]), 160, delta=18)
+        self.assertAlmostEqual(np.mean(r_pts[:, 0]), 480, delta=18)
+
     # ── Polynomial Fitting ──
     def test_fit_poly_insufficient_points(self):
         pts = np.array([[100, 100], [101, 101]], dtype=np.float64)
@@ -154,6 +176,20 @@ class TestLaneDetector(unittest.TestCase):
             det._validate_and_smooth(None, right_fit)
         self.assertEqual(len(det.right_fit_hist), 5)
         self.assertEqual(len(det.left_fit_hist), 5)
+
+    def test_invalid_pair_keeps_stable_side(self):
+        det = LaneDetector((self.h, self.w))
+        left_fit = np.array([0.0, 0.0, 150.0])
+        right_fit = np.array([0.0, 0.0, 505.0])
+        det._validate_and_smooth(left_fit, right_fit, left_conf=100, right_conf=100)
+
+        bad_right = np.array([0.0, 0.0, 280.0])
+        lf, rf = det._validate_and_smooth(left_fit, bad_right, left_conf=100, right_conf=100)
+
+        self.assertIsNotNone(lf)
+        self.assertIsNotNone(rf)
+        self.assertAlmostEqual(np.polyval(lf, self.h - 1), 150, delta=3)
+        self.assertAlmostEqual(np.polyval(rf, self.h - 1), 505, delta=3)
 
     def test_missed_frame_counter(self):
         det = LaneDetector((self.h, self.w))
