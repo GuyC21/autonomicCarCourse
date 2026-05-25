@@ -114,16 +114,26 @@ class LaneDetector:
     # ──────────────────────── Sliding Window Search ────────────────────────
     def _sliding_window_search(self, warped_bin: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         h, w = warped_bin.shape
-        bottom_half = warped_bin[h // 2:, :]
-        hist = np.sum(bottom_half, axis=0).astype(np.float64)
+        histogram = np.sum(warped_bin[h // 2:, :], axis=0)
+        
+        # Restrict base search regions to ignore adjacent lanes or far-edge shadows.
+        # Ego lane boundaries at the bottom of the image are highly predictable.
+        left_min, left_max = int(self.width * 0.10), int(self.width * 0.45)
+        right_min, right_max = int(self.width * 0.55), int(self.width * 0.85)
 
-        mid = w // 2
-        l_base = int(np.argmax(hist[:mid]))
-        r_base = int(np.argmax(hist[mid:])) + mid
+        if np.max(histogram[left_min:left_max]) > 0:
+            l_base = np.argmax(histogram[left_min:left_max]) + left_min
+        else:
+            l_base = int(self.width * 0.25)
 
-        if hist[l_base] < 300:
+        if np.max(histogram[right_min:right_max]) > 0:
+            r_base = np.argmax(histogram[right_min:right_max]) + right_min
+        else:
+            r_base = int(self.width * 0.75)
+
+        if histogram[l_base] < 300:
             l_base = int(w * 0.25)
-        if hist[r_base] < 300:
+        if histogram[r_base] < 300:
             r_base = int(w * 0.75)
 
         win_h = h // self.n_windows
