@@ -27,6 +27,7 @@ class LaneDetector:
         # many pixels.  For the project video resolution this remains 355 px,
         # matching the previous calibration while making the value scalable.
         self.expected_lane_width_px = int(round(self.width * 0.555))
+        self.nominal_lane_width_px = float(self.expected_lane_width_px)
         self.min_lane_width_px = int(round(self.expected_lane_width_px * 0.62))
         self.max_lane_width_px = int(round(self.expected_lane_width_px * 1.42))
 
@@ -202,9 +203,12 @@ class LaneDetector:
         return np.asarray(kept, dtype=np.int32)
 
     def _current_lane_width(self) -> float:
-        if self.lane_width_hist:
-            return float(np.median(self.lane_width_hist))
-        return float(self.expected_lane_width_px)
+        if not self.lane_width_hist:
+            return self.nominal_lane_width_px
+        width = float(np.median(self.lane_width_hist))
+        low = self.nominal_lane_width_px * 0.90
+        high = self.nominal_lane_width_px * 1.10
+        return float(np.clip(width, low, high))
 
     def _average_fit(self, history: deque) -> Optional[np.ndarray]:
         if not history:
@@ -291,11 +295,11 @@ class LaneDetector:
                     segment_bases.append(base)
 
         left_values = self._histogram_peaks(hist, int(self.width * 0.03), int(self.width * 0.58))
-        right_values = self._histogram_peaks(hist, int(self.width * 0.42), int(self.width * 0.92))
+        right_values = self._histogram_peaks(hist, int(self.width * 0.42), int(self.width * 0.88))
         left_values += [base for base in segment_bases if base < target_center + expected * 0.20]
         right_values += [
             base for base in segment_bases
-            if (base > target_center - expected * 0.20 and base < self.width * 0.92)
+            if (base > target_center - expected * 0.20 and base < self.width * 0.88)
         ]
 
         left_candidates = self._dedupe_candidates(left_values)
@@ -321,8 +325,9 @@ class LaneDetector:
                 score += abs(left_base - prev_left_base) * 0.20
                 score += abs(right_base - prev_right_base) * 0.20
                 # Strongly discourage snapping to the road edge on the far right.
-                if right_base > self.width * 0.88:
-                    score += (right_base - self.width * 0.88) * 4.0
+                if right_base > self.width * 0.84:
+                    over = right_base - self.width * 0.84
+                    score += over * 7.0 + 0.10 * over * over
                 if left_base > self.width * 0.58:
                     score += (left_base - self.width * 0.58) * 3.0
                 li = int(np.clip(round(left_base), 0, self.width - 1))
@@ -526,7 +531,7 @@ class LaneDetector:
         bottom_x = float(xs[-1])
         if side == "left" and not (self.width * 0.02 < bottom_x < self.width * 0.58):
             return False
-        if side == "right" and not (self.width * 0.38 < bottom_x < self.width * 0.92):
+        if side == "right" and not (self.width * 0.38 < bottom_x < self.width * 0.88):
             return False
 
         derivatives = np.abs(2.0 * fit[0] * ys + fit[1])
@@ -552,7 +557,7 @@ class LaneDetector:
             np.polyval(left_fit, self.height - 1) +
             np.polyval(right_fit, self.height - 1)
         ) / 2.0
-        return bool(self.width * 0.12 < bottom_center < self.width * 0.82)
+        return bool(self.width * 0.12 < bottom_center < self.width * 0.78)
 
     def _fit_deviation(self, fit: np.ndarray, reference: np.ndarray) -> float:
         ys = np.linspace(self.height * 0.35, self.height - 1, 5)
@@ -561,7 +566,9 @@ class LaneDetector:
     def _update_lane_width(self, left_fit: np.ndarray, right_fit: np.ndarray) -> None:
         ys = np.array([self.height * 0.45, self.height * 0.70, self.height - 1], dtype=np.float64)
         widths = np.polyval(right_fit, ys) - np.polyval(left_fit, ys)
-        valid = widths[(widths > self.min_lane_width_px) & (widths < self.max_lane_width_px)]
+        low = self.nominal_lane_width_px * 0.88
+        high = self.nominal_lane_width_px * 1.12
+        valid = widths[(widths > low) & (widths < high)]
         if valid.size:
             self.lane_width_hist.append(float(np.median(valid)))
             self.xm_per_pix = 3.7 / max(self._current_lane_width(), 1.0)
@@ -616,6 +623,23 @@ class LaneDetector:
             right_fit = self._infer_missing_lane(left_fit, is_right=False)
             valid_r = self._valid_single_fit(right_fit, "right")
 
+        if valid_l and valid_r:
+            center_bottom = (
+                float(np.polyval(left_fit, self.height - 1)) +
+                float(np.polyval(right_fit, self.height - 1))
+            ) / 2.0
+            # In left-lane driving, a truck often hides the right line.
+            # Prefer a stable left-line fit and infer the missing/noisy right side.
+            if center_bottom < self.width * 0.45 and right_conf < left_conf * 0.75:
+                inferred_r = self._infer_missing_lane(left_fit, is_right=False)
+                if self._valid_single_fit(inferred_r, "right"):
+                    right_fit = inferred_r
+            # Mirror case for right-lane driving.
+            elif center_bottom > self.width * 0.55 and left_conf < right_conf * 0.75:
+                inferred_l = self._infer_missing_lane(right_fit, is_right=True)
+                if self._valid_single_fit(inferred_l, "left"):
+                    left_fit = inferred_l
+
         pair_ok = bool(valid_l and valid_r and self._valid_lane_pair(left_fit, right_fit))
 
         if pair_ok and prev_l is not None and prev_r is not None:
@@ -623,7 +647,20 @@ class LaneDetector:
             l_dev = self._fit_deviation(left_fit, prev_l)
             r_dev = self._fit_deviation(right_fit, prev_r)
             if l_dev > max_dev and r_dev > max_dev:
-                pair_ok = False
+                prev_lb = float(np.polyval(prev_l, self.height - 1))
+                prev_rb = float(np.polyval(prev_r, self.height - 1))
+                new_lb = float(np.polyval(left_fit, self.height - 1))
+                new_rb = float(np.polyval(right_fit, self.height - 1))
+                shift_l = new_lb - prev_lb
+                shift_r = new_rb - prev_rb
+                same_direction = np.sign(shift_l) == np.sign(shift_r)
+                coherent_shift = abs(shift_l - shift_r) < max(22.0, self._current_lane_width() * 0.08)
+                width_ok = self._valid_lane_pair(left_fit, right_fit)
+                # Allow coherent lateral motion of both lines (lane-change behavior).
+                if same_direction and coherent_shift and width_ok:
+                    pair_ok = True
+                else:
+                    pair_ok = False
             elif l_dev > max_dev:
                 left_fit = self._infer_missing_lane(right_fit, is_right=True)
                 pair_ok = self._valid_lane_pair(left_fit, right_fit)
@@ -746,6 +783,9 @@ class LaneDetector:
         right_raw = self._fit_poly(right_pts)
 
         lf, rf = self._validate_and_smooth(left_raw, right_raw, len(left_pts), len(right_pts))
+        if self.last_status != "TRACKING":
+            # Never render a stale polygon during low-confidence tracking.
+            lf, rf = None, None
 
         overlay = np.zeros_like(frame)
         curvature = 0.0
@@ -769,7 +809,7 @@ class LaneDetector:
         if lf is None or rf is None:
             self.prev_render_left_x = None
             self.prev_render_right_x = None
-            text, color = "LANE LOST", (0, 0, 255)
+            text, color = ("TEMPORARY OCCLUSION", (0, 165, 255)) if self.last_status == "DEAD_RECKONING" else ("LANE LOST", (0, 0, 255))
         elif curvature > 5000:
             text, color = "Curve Radius: ~Straight", (0, 255, 0)
         else:
