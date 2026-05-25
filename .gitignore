@@ -1,13 +1,19 @@
-debug_output
-calibrate.py
-debug_pipeline.py
-deep_debug.py
-calibrate.py
-__pycache__
-.uv-cache/
-.uv-python/
-project_video_output.mp4
-project_video_lane_output.mp4
-project_video.mp4
-stress_test.py
-lane_calib.npy
+# Ignore everything by default
+*
+
+# Do not ignore this .gitignore file
+!.gitignore
+
+# Do not ignore the main pipeline file
+!lane_pipeline.py
+
+# Do not ignore the project documentation and presentation
+!Project_Theory_Description.docx
+!Project_Presentation.pptx
+
+# Explicitly ensure video files are ignored (in line with the strict restriction)
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.webm
