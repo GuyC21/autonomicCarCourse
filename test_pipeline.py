@@ -18,7 +18,7 @@ class TestLaneDetector(unittest.TestCase):
     def setUp(self):
         self.det = LaneDetector((self.h, self.w))
 
-    # ── Construction ──
+    # Construction
     def test_init_resolution(self):
         self.assertEqual(self.det.height, 360)
         self.assertEqual(self.det.width, 640)
@@ -45,7 +45,7 @@ class TestLaneDetector(unittest.TestCase):
     def test_expected_lane_width(self):
         self.assertEqual(self.det.expected_lane_width_px, 355)
 
-    # ── Feature Extraction ──
+    # Feature Extraction
     def test_extract_features_shape(self):
         frame = np.random.randint(0, 255, (self.h, self.w, 3), dtype=np.uint8)
         feat = self.det._extract_lane_features(frame)
@@ -67,7 +67,7 @@ class TestLaneDetector(unittest.TestCase):
         feat = self.det._extract_lane_features(frame)
         self.assertGreater(np.sum(feat), 0)
 
-    # ── Sliding Window ──
+    # Sliding Window
     def test_sliding_window_empty(self):
         blank = np.zeros((self.h, self.w), dtype=np.uint8)
         l_pts, r_pts = self.det._sliding_window_search(blank)
@@ -108,13 +108,13 @@ class TestLaneDetector(unittest.TestCase):
         self.assertAlmostEqual(np.mean(l_pts[:, 0]), 160, delta=18)
         self.assertAlmostEqual(np.mean(r_pts[:, 0]), 480, delta=18)
 
-    # ── Polynomial Fitting ──
+    # Polynomial Fitting
     def test_fit_poly_insufficient_points(self):
         pts = np.array([[100, 100], [101, 101]], dtype=np.float64)
         self.assertIsNone(self.det._fit_poly(pts))
 
     def test_fit_poly_low_span(self):
-        # 50 points but all at the same y — low vertical span
+        # 50 points but all at the same y - low vertical span
         pts = np.column_stack([np.linspace(100, 200, 50), np.full(50, 100)])
         self.assertIsNone(self.det._fit_poly(pts))
 
@@ -135,7 +135,7 @@ class TestLaneDetector(unittest.TestCase):
         # First coefficient (quadratic) should be ~0
         self.assertAlmostEqual(fit[0], 0, places=3)
 
-    # ── Lane Inference ──
+    # Lane Inference
     def test_infer_left_from_right(self):
         right_fit = np.array([0.0001, -0.1, 500.0])
         left_fit = self.det._infer_missing_lane(right_fit, is_right=True)
@@ -154,7 +154,7 @@ class TestLaneDetector(unittest.TestCase):
         self.det._infer_missing_lane(original, is_right=True)
         np.testing.assert_array_equal(original, original_copy)
 
-    # ── Validation & Smoothing ──
+    # Validation & Smoothing
     def test_validate_right_valid(self):
         det = LaneDetector((self.h, self.w))
         right_fit = np.array([0.0, 0.0, 480.0])  # bot=480
@@ -201,7 +201,7 @@ class TestLaneDetector(unittest.TestCase):
         det._validate_and_smooth(None, np.array([0.0, 0.0, 480.0]))
         self.assertEqual(det.missed, 0)
 
-    # ── Curvature ──
+    # Curvature
     def test_curvature_straight(self):
         lf = np.array([0.0, 0.0, 150.0])
         rf = np.array([0.0, 0.0, 500.0])
@@ -215,7 +215,7 @@ class TestLaneDetector(unittest.TestCase):
         self.assertGreater(curv, 0)
         self.assertLess(curv, 10000)
 
-    # ── Full Pipeline ──
+    # Full Pipeline
     def test_process_frame_output_shape(self):
         frame = np.random.randint(0, 255, (self.h, self.w, 3), dtype=np.uint8)
         result = self.det.process_frame(frame)

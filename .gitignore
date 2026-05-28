@@ -7,6 +7,9 @@
 # Do not ignore the main pipeline file
 !lane_pipeline.py
 
+# Do not ignore dependency metadata
+!requirements.txt
+
 # Do not ignore the project documentation and presentation
 !Project_Theory_Description.docx
 !Project_Presentation.pptx
